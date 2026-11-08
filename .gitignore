@@ -16,3 +16,7 @@ x86/
 bbin/
 obj/
 *.bak
+
+*.user
+*.userosscache
+*.sln.docstates
