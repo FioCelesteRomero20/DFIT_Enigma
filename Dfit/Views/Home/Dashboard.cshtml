@@ -10,6 +10,7 @@
     </div>
     <div class="d-flex gap-3">
         <form method="get" asp-action="Dashboard" class="d-flex gap-2">
+            @Html.AntiForgeryToken()
             <input type="text" name="search" class="form-control" placeholder="Buscar por DNI, Nombre..." value="@ViewBag.SearchTerm" style="width: 250px;" />
             <button type="submit" class="btn btn-secondary">Buscar</button>
             @if(!string.IsNullOrEmpty((string)ViewBag.SearchTerm)) {
