@@ -27,16 +27,19 @@ namespace Dfit.Controllers
         private readonly FirestoreDb _db;
         private readonly ISubject _userRegistrationSubject;
         private readonly IRateLimiter _rateLimiter;
+        private readonly IPasswordHasherService _passwordHasher;
 
         public AuthController(
             ILogger<AuthController> logger,
             FirestoreDb db,
             ISubject userRegistrationSubject,
+            IPasswordHasherService passwordHasher,
             IRateLimiter? rateLimiter = null)
         {
             _logger = logger;
             _db = db;
             _userRegistrationSubject = userRegistrationSubject;
+            _passwordHasher = passwordHasher;
             _rateLimiter = rateLimiter ?? new RateLimiter();
         }
 
@@ -143,7 +146,7 @@ namespace Dfit.Controllers
                 var passwordAlmacenada = userDoc.ContainsField("PasswordHash") ? userDoc.GetValue<string>("PasswordHash") : null;
 
                 // 2. Si el correo sí existe pero la contraseña es errónea, aplicar el RateLimiter específico de la cuenta
-                if (string.IsNullOrEmpty(passwordAlmacenada) || passwordAlmacenada != model.Password)
+                if (string.IsNullOrEmpty(passwordAlmacenada) || !_passwordHasher.VerifyPassword(passwordAlmacenada, model.Password))
                 {
                     var estadoFallo = _rateLimiter.RegistrarFallo("login", correoNormalizado, ipParaRateLimit);
                     _logger.LogWarning("Contraseña incorrecta para {Email} desde IP {Ip}. Intentos restantes: {Restantes}, Bloqueado: {Bloqueado}",
@@ -168,6 +171,15 @@ namespace Dfit.Controllers
 
                 // Autenticación exitosa: restablecer el contador de intentos fallidos
                 _rateLimiter.RegistrarExito("login", correoNormalizado, ipParaRateLimit);
+
+                // Migración transparente: si la contraseña estaba almacenada en texto plano,
+                // rehashearla automáticamente para cumplir con OWASP A02:2021 sin afectar al usuario.
+                if (!_passwordHasher.IsHashed(passwordAlmacenada!))
+                {
+                    var nuevoHash = _passwordHasher.HashPassword(model.Password);
+                    await userDoc.Reference.UpdateAsync("PasswordHash", nuevoHash);
+                    _logger.LogInformation("Contraseña migrada a hash seguro para {Email}.", correoNormalizado);
+                }
 
                 var nombre = userDoc.ContainsField("Nombres") ? userDoc.GetValue<string>("Nombres") : model.Correo;
                 var rol = userDoc.ContainsField("Rol") ? userDoc.GetValue<string>("Rol") : "Usuario";
@@ -213,6 +225,11 @@ namespace Dfit.Controllers
                 if (rol == "Admin")
                 {
                     return RedirectToAction("Dashboard", "Home");
+                }
+
+                if (rol == "Recepcionista")
+                {
+                    return RedirectToAction("Recepcion", "Home");
                 }
 
                 return RedirectToAction("MiMembresia", "Home", new { id = userDoc.Id });
@@ -314,7 +331,7 @@ namespace Dfit.Controllers
                 }
 
                 var docRef = _db.Collection("Usuarios").Document();
-                var nuevoUsuario = BuildNewUser(model, docRef.Id);
+                var nuevoUsuario = BuildNewUser(model, docRef.Id, _passwordHasher);
 
                 await docRef.SetAsync(new
                 {
@@ -366,10 +383,11 @@ namespace Dfit.Controllers
             return !userDoc.ContainsField("Activo") || userDoc.GetValue<bool>("Activo");
         }
 
-        private static Usuario BuildNewUser(RegisterViewModel model, string documentId)
+        private static Usuario BuildNewUser(RegisterViewModel model, string documentId, IPasswordHasherService passwordHasher)
         {
             var builder = new UsuarioBuilder();
             var usuario = builder
+                .WithPasswordHasher(passwordHasher)
                 .SetDatosBasicos(model.Nombres, model.Apellidos, model.Correo)
                 .SetDatosIdentidad(model.DNI, model.Celular)
                 .SetPassword(model.Password)

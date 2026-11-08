@@ -65,6 +65,7 @@ FirebaseConfig.Configure(builder);
 
 builder.Services.AddSingleton<IQRTokenService, QRTokenManager>();
 builder.Services.AddSingleton<IRateLimiter, RateLimiter>();
+builder.Services.AddSingleton<IPasswordHasherService, PasswordHasherService>();
 builder.Services.AddScoped<RealGymAccess>();
 builder.Services.AddScoped<IGymAccess, GymAccessProxy>();
 builder.Services.AddScoped<PaymentContext>();
@@ -92,6 +93,28 @@ if (!app.Environment.IsDevelopment())
     // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
     app.UseHsts();
 }
+
+// Middleware global de cabeceras de seguridad HTTP (Mitigación OWASP ZAP)
+app.Use(async (context, next) =>
+{
+    // 1. Content Security Policy (CSP): lista blanca de orígenes para scripts, estilos y fuentes
+    context.Response.Headers.Append("Content-Security-Policy",
+        "default-src 'self'; " +
+        "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; " +
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+        "font-src 'self' https://fonts.gstatic.com data:; " +
+        "img-src 'self' data: https:; " +
+        "frame-ancestors 'self';");
+
+    // 2. Prevención de Clickjacking universal (incluye pantalla de Login y vistas administrativas)
+    context.Response.Headers.Append("X-Frame-Options", "SAMEORIGIN");
+
+    // 3. Buenas prácticas adicionales de seguridad recomendadas por ZAP
+    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+    context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+
+    await next();
+});
 
 app.UseHttpsRedirection();
 app.UseStaticFiles();
