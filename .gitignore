@@ -6,6 +6,7 @@
 .env
 .vs
 .vscode/
+.codegraph/
 
 ## Visual Studio herramientas y archivos temporales
 .vs/
@@ -20,3 +21,15 @@ obj/
 *.user
 *.userosscache
 *.sln.docstates
+
+## Resultados de pruebas y logs temporales
+TestResults/
+*.trx
+
+## Archivos de sistema operativo
+.DS_Store
+Thumbs.db
+
+## Aplicación móvil (Flutter / Android / iOS / Web / Desktop)
+Dfit_App_Movile/
+

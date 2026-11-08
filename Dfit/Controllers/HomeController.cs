@@ -10,6 +10,7 @@ using Google.Cloud.Firestore;
 using Dfit.Models.Patterns.Singleton;
 using Dfit.Models.Patterns.Proxy;
 using Dfit.Models.Patterns.Strategy;
+using Dfit.Services;
 using Microsoft.AspNetCore.Authorization;
 using Dfit.Utils;
 
@@ -24,19 +25,22 @@ namespace Dfit.Controllers
         private readonly IQRTokenService _qrTokenService;
         private readonly IGymAccess _gymAccess;
         private readonly PaymentContext _paymentContext;
+        private readonly IPasswordHasherService _passwordHasher;
 
         public HomeController(
             ILogger<HomeController> logger, 
             FirestoreDb db,
             IQRTokenService qrTokenService,
             IGymAccess gymAccess,
-            PaymentContext paymentContext)
+            PaymentContext paymentContext,
+            IPasswordHasherService passwordHasher)
         {
             _logger = logger;
             _db = db;
             _qrTokenService = qrTokenService;
             _gymAccess = gymAccess;
             _paymentContext = paymentContext;
+            _passwordHasher = passwordHasher;
         }
 
         public IActionResult Index()
@@ -136,6 +140,7 @@ namespace Dfit.Controllers
             {
                 var doc = _db.Collection("Usuarios").Document();
                 model.Id = doc.Id;
+                model.PasswordHash = _passwordHasher.HashPassword(model.PasswordHash);
                 await doc.SetAsync(new {
                     Nombres = model.Nombres,
                     Apellidos = model.Apellidos,
@@ -259,7 +264,7 @@ namespace Dfit.Controllers
                 };
                 if (!string.IsNullOrEmpty(model.NewPassword))
                 {
-                    dict["PasswordHash"] = model.NewPassword;
+                    dict["PasswordHash"] = _passwordHasher.HashPassword(model.NewPassword);
                 }
                 await _db.Collection("Usuarios").Document(model.Id).UpdateAsync(dict);
                 ViewBag.Message = "Perfil actualizado correctamente.";
@@ -672,6 +677,9 @@ namespace Dfit.Controllers
                 ? (!string.IsNullOrWhiteSpace(model.DNI) ? model.DNI.Trim() : "123456") 
                 : model.PasswordHash.Trim();
 
+            // Hashear la contraseña antes de almacenarla (OWASP A02:2021)
+            var hashedPassword = _passwordHasher.HashPassword(password);
+
             var nuevoUsuario = new Usuario
             {
                 Id = doc.Id,
@@ -680,7 +688,7 @@ namespace Dfit.Controllers
                 Correo = correoNormalizado,
                 DNI = model.DNI?.Trim() ?? "",
                 Celular = model.Celular?.Trim() ?? "",
-                PasswordHash = password,
+                PasswordHash = hashedPassword,
                 Rol = "Usuario",
                 Activo = true,
                 FechaRegistro = DateTime.UtcNow

@@ -13,12 +13,14 @@
 | **Base de Datos** | Google Cloud Firestore | SDK 4.3.0 |
 | **SDK Firebase** | FirebaseAdmin | 3.5.0 |
 | **ORM (legado)** | Entity Framework Core SqlServer | 8.0.0 (paquete presente pero NO usado activamente — migrado a Firestore) |
-| **Frontend** | Razor Views (.cshtml) + Bootstrap 5 + jQuery + Sincronización multi-pestaña (`BroadcastChannel`) | — |
+| **Frontend** | Razor Views (.cshtml) + Bootstrap 5 + jQuery + Sincronización multi-pestaña (`BroadcastChannel`) + Atajos dinámicos | — |
 | **Estilos** | CSS propio (`site.css`) + `dfit-login.css` (autenticación y accesibilidad) + Bootstrap 5 | — |
 | **Contenedorización** | Docker (imagen `dotnet/aspnet:10.0`) | — |
 | **Autenticación** | ASP.NET Core Cookie Authentication (`DFIT_AUTH_SESSION`) + Claims + Sincronización multi-pestaña | — |
+| **Criptografía / Contraseñas** | `Microsoft.AspNetCore.Identity.PasswordHasher<T>` (PBKDF2 con HMAC-SHA256/512, sal aleatoria de 128 bits, 100k+ iteraciones) + Migración transparente de contraseñas legadas | OWASP A02:2021 |
+| **Seguridad Web (OWASP ZAP)** | Rate Limiting (antifuerza bruta / credential stuffing), IP Pública Filtering (`IpHelper`), CSP, X-Frame-Options (Clickjacking), X-Content-Type-Options | OWASP Top 10 |
 | **Autenticación QR** | Sistema propio con tokens GUID + expiración 1 min | — |
-| **Pruebas Unitarias** | MSTest v4 (SDK `MSTest.Sdk/4.0.2`) — 31 tests (100% aprobados) | 4.0.2 |
+| **Pruebas Unitarias** | MSTest v4 (SDK `MSTest.Sdk/4.0.2`) — 68 tests (100% aprobados) | 4.0.2 |
 
 > [!NOTE]
 > Tanto el `.csproj` como el `Dockerfile` apuntan a `.NET 10.0` (`net10.0`), asegurando compatibilidad completa en compilación y tiempo de ejecución.
@@ -34,12 +36,12 @@
 Dfit/                               ← Raíz de la solución
 ├── Dfit.sln                        ← Solución con 2 proyectos (App + Tests)
 ├── .env.example                    ← Plantilla de variables de entorno
-├── .gitignore
+├── .gitignore                      ← Filtra temporales, keys y el directorio móvil
 │
 ├── Dfit/                           ← Proyecto principal (Web App ASP.NET Core)
 │   ├── Controllers/
-│   │   ├── AuthController.cs       ← 🆕 Controlador de autenticación (300 líneas, SRP, [AllowAnonymous])
-│   │   └── HomeController.cs       ← Controlador principal de negocio (826 líneas, [Authorize], RBAC)
+│   │   ├── AuthController.cs       ← Controlador de autenticación (Login, Registro, Rate Limiter, Hasheo)
+│   │   └── HomeController.cs       ← Controlador de negocio y recepción (RBAC: Admin, Recepcionista, Usuario)
 │   │
 │   ├── Models/
 │   │   ├── Asistencia.cs
@@ -51,13 +53,14 @@ Dfit/                               ← Raíz de la solución
 │   │   ├── MembresiaUsuario.cs
 │   │   ├── Pago.cs
 │   │   ├── ProfileViewModel.cs
+│   │   ├── RecepcionViewModel.cs   ← 🆕 Modelo de soporte para la consola de recepción
 │   │   ├── RegisterViewModel.cs
-│   │   ├── ReglasMembresia.cs      ← 🆕 Reglas de vigencia y acceso (funciones puras, testables)
+│   │   ├── ReglasMembresia.cs      ← Reglas de vigencia y acceso (funciones puras, testables)
 │   │   ├── Rutina.cs
 │   │   ├── Usuario.cs
 │   │   └── Patterns/
 │   │       ├── Builder/
-│   │       │   └── UsuarioBuilder.cs
+│   │       │   └── UsuarioBuilder.cs ← Builder con inyección de Hasher para contraseñas
 │   │       ├── Observer/
 │   │       │   └── UserRegistrationObserver.cs
 │   │       ├── Proxy/
@@ -67,18 +70,26 @@ Dfit/                               ← Raíz de la solución
 │   │       └── Strategy/
 │   │           └── PaymentStrategy.cs
 │   │
-│   ├── Utils/                       ← 🆕 Utilidades transversales
+│   ├── Services/                    ← 🆕 Servicios del núcleo de seguridad y control
+│   │   ├── IPasswordHasherService.cs ← Interfaz de hasheo PBKDF2 y verificación
+│   │   ├── PasswordHasherService.cs  ← Implementación segura + migración transparente de texto plano
+│   │   ├── IRateLimiter.cs           ← Abstracción para limitación de tasa e intentos
+│   │   └── RateLimiter.cs            ← Implementación de bloqueo por cuenta e IP (OWASP)
+│   │
+│   ├── Utils/                       ← Utilidades transversales
 │   │   ├── EnvLoader.cs             ← Carga de variables .env (no sobrescribe las del sistema)
-│   │   ├── FirebaseConfig.cs        ← Configuración Firebase (2 opciones: env vars o archivo local)
+│   │   ├── FirebaseConfig.cs        ← Configuración Firebase con complejidad condicional <= 2
+│   │   ├── IpHelper.cs              ← 🆕 Detección de IP cliente y discriminación pública vs privada
 │   │   └── PermisosHelper.cs        ← Extensiones de ClaimsPrincipal para roles y permisos
 │   │
 │   ├── Views/
-│   │   ├── Auth/                    ← 🆕 Vistas de autenticación rediseñadas
-│   │   │   ├── Login.cshtml         ← Login moderno con drawer de soporte y remember email
-│   │   │   ├── Register.cshtml      ← Registro con validaciones en tiempo real
-│   │   │   └── AccessDenied.cshtml  ← 🆕 Página 403 de acceso denegado
-│   │   ├── Home/                    ← 23 vistas Razor de negocio
+│   │   ├── Auth/                    ← Vistas de autenticación
+│   │   │   ├── Login.cshtml         ← Login moderno con drawer de soporte, rate limit y remember email
+│   │   │   ├── Register.cshtml      ← Registro con validaciones en tiempo real (OWASP)
+│   │   │   └── AccessDenied.cshtml  ← Página 403 de acceso denegado
+│   │   ├── Home/                    ← 24 vistas Razor de negocio
 │   │   │   ├── Dashboard.cshtml
+│   │   │   ├── Recepcion.cshtml     ← 🆕 Consola operativa del recepcionista (monitoreo y cobro ágil)
 │   │   │   ├── Profile.cshtml
 │   │   │   ├── CreateUser.cshtml / EditUser.cshtml
 │   │   │   ├── Membresias.cshtml / CreateMembresia.cshtml / EditMembresia.cshtml
@@ -90,45 +101,49 @@ Dfit/                               ← Raíz de la solución
 │   │   └── Shared/
 │   │       ├── _Layout.cshtml       ← Menú reactivo por rol, data-usuario-id y logout sync
 │   │       ├── _Layout.cshtml.css
-│   │       ├── _AssistanceDrawer.cshtml ← 🆕 Drawer lateral offcanvas de soporte y accesibilidad
+│   │       ├── _AssistanceDrawer.cshtml ← Drawer lateral con atajo dinámico de teclado (accesibilidad)
 │   │       ├── _ValidationScriptsPartial.cshtml
 │   │       └── Error.cshtml
 │   │
 │   ├── wwwroot/
 │   │   ├── css/
 │   │   │   ├── site.css             ← Estilos globales de la plataforma
-│   │   │   └── dfit-login.css       ← 🆕 Estilos modernos para login, registro y drawer
+│   │   │   └── dfit-login.css       ← Estilos para login, registro y drawer
 │   │   ├── images/logo.png
 │   │   ├── js/
 │   │   │   ├── site.js
-│   │   │   └── dfit-sincronizacion-sesion.js ← 🆕 Sincronización multi-pestaña (BroadcastChannel)
+│   │   │   └── dfit-sincronizacion-sesion.js ← Sincronización multi-pestaña (BroadcastChannel)
 │   │   └── lib/                     ← Bootstrap 5 + jQuery
 │   │
-│   ├── Program.cs                   ← Entry point, Kestrel dinámico, DI, Auth Cookies, Firebase
+│   ├── Program.cs                   ← Pipeline, DI (PasswordHasher, RateLimiter), Headers OWASP (CSP, Clickjacking)
 │   ├── Dfit.csproj
 │   ├── appsettings.json
-│   ├── firebase-key.json            ← ⚠️ Credenciales Firebase (en repo)
+│   ├── firebase-key.json            ← Credenciales Firebase (soporta variables en Render)
 │   └── Dockerfile
 │
-├── PruebasUnitarias/                ← 🆕 Proyecto de pruebas unitarias (MSTest v4)
+├── PruebasUnitarias/                ← Proyecto de pruebas unitarias (MSTest v4 - 68 tests)
 │   ├── PruebasUnitarias.csproj      ← MSTest SDK 4.0.2, referencia a Dfit.csproj
 │   ├── MSTestSettings.cs            ← Configuración: ejecución paralela a nivel método
 │   ├── PruebaDocumentada.cs         ← Clase base con helper Comprobar<T> (logging TRX)
+│   ├── PasswordHasherTests.cs       ← 🆕 8 tests: hashing PBKDF2, sal aleatoria y migración transparente
+│   ├── RateLimiterTests.cs          ← 🆕 13 tests: bloqueo temporal por cuenta e IP (antifuerza bruta)
+│   ├── IpHelperTests.cs             ← 🆕 11 tests: discriminación de IPs públicas vs loopback/privadas
+│   ├── RegistroValidacionTests.cs   ← 🆕 5 tests: entropía y reglas OWASP en registro de contraseñas
 │   ├── Test1.cs                     ← 7 tests: PaymentContext (Strategy y umbrales)
 │   ├── CalculoVigenciaTests.cs      ← 6 tests: cálculo de fechas de vigencia
 │   ├── MembresiaAccesoTests.cs      ← 6 tests: reglas de acceso por membresía
 │   ├── EnvLoaderTests.cs            ← 5 tests: carga de archivos .env ([DoNotParallelize])
 │   └── PermisosHelperTests.cs       ← 7 tests: validación de roles, propiedad y claims
 │
-├── docs/pruebas-unitarias/          ← 🆕 Documentación formal de pruebas y evidencias
+├── docs/pruebas-unitarias/          ← Documentación formal de pruebas y evidencias
 │   ├── IEEE829-CASOS.md             ← Especificación de casos de prueba según norma IEEE 829
 │   ├── GUIA_DEMOSTRACION.md         ← Guía paso a paso para demostración de pruebas
 │   ├── README.md                    ← Informe de ejecución y resultados
 │   ├── Ejecutar-Evidencia.ps1       ← Script PowerShell para generar evidencias TRX
 │   └── evidencias/                  ← Reportes TRX de ciclo TDD (baseline, red, green, refactor)
 │
-└── Dfit_App_Movile/                 ← 📱 Aplicación móvil complementaria (Flutter)
-    └── dfit_gym_app/                ← Proyecto Flutter para iOS / Android / Desktop
+└── Dfit_App_Movile/                 ← 📱 Aplicación móvil complementaria (Flutter - en .gitignore)
+    └── dfit_gym_app/                ← Proyecto Flutter (mantenido independientemente)
 ```
 
 > [!CAUTION]
@@ -329,30 +344,44 @@ Ruta por defecto: `{controller=Auth}/{action=Login}/{id?}`
 
 ## 5. Sistema de Autenticación y Control de Acceso 🆕
 
-### 5.1 Flujo de Autenticación (Cookie-based)
+### 5.1 Flujo de Autenticación con Hasheo Seguro y Rate Limiter
 
 ```mermaid
 sequenceDiagram
     actor Usuario
     participant Login as Auth/Login (Vista)
+    participant RateLim as IRateLimiter
     participant AuthCtrl as AuthController
+    participant Hasher as PasswordHasherService
     participant Firestore
-    participant Middleware as ASP.NET Core Pipeline
 
     Usuario->>Login: Ingresa correo y contraseña
     Login->>AuthCtrl: POST /Auth/Login (LoginViewModel)
-    AuthCtrl->>Firestore: Query Usuarios WHERE Correo = x AND PasswordHash = y
-    Firestore-->>AuthCtrl: DocumentSnapshot (o vacío)
-
-    alt Credenciales válidas + cuenta activa
-        AuthCtrl->>AuthCtrl: Construir Claims (NameIdentifier, Name, Email, Role)
-        AuthCtrl->>Middleware: HttpContext.SignInAsync (emite cookie DFIT_AUTH_SESSION)
-        AuthCtrl->>AuthCtrl: Respaldar en Session (compatibilidad)
-        AuthCtrl-->>Usuario: Redirect → Dashboard (Admin) o MiMembresia (Usuario)
-    else Credenciales inválidas
-        AuthCtrl-->>Usuario: Vista Login con error
-    else Cuenta desactivada
-        AuthCtrl-->>Usuario: Vista Login con "cuenta desactivada"
+    AuthCtrl->>RateLim: Verificar("login", correo, ipCliente)
+    alt Bloqueado temporalmente por intentos fallidos
+        RateLim-->>AuthCtrl: Bloqueado (tiempo restante)
+        AuthCtrl-->>Usuario: Vista Login con alerta de bloqueo temporal
+    else Acceso permitido para evaluar
+        AuthCtrl->>Firestore: Buscar usuario por Correo
+        Firestore-->>AuthCtrl: DocumentSnapshot
+        alt Usuario no encontrado
+            AuthCtrl-->>Usuario: "Correo no registrado"
+        else Usuario existe
+            AuthCtrl->>Hasher: VerifyPassword(passwordAlmacenada, passwordIngresada)
+            alt Contraseña incorrecta
+                AuthCtrl->>RateLim: RegistrarFallo("login", correo, ipCliente)
+                AuthCtrl-->>Usuario: "Contraseña incorrecta (intentos restantes / bloqueo)"
+            else Contraseña válida
+                AuthCtrl->>RateLim: RegistrarExito("login", correo, ipCliente)
+                opt Si la contraseña estaba en texto plano legado (!IsHashed)
+                    AuthCtrl->>Hasher: HashPassword(passwordIngresada)
+                    AuthCtrl->>Firestore: UpdateAsync("PasswordHash", nuevoHashPBKDF2)
+                end
+                AuthCtrl->>AuthCtrl: Emitir Claims (Id, Nombre, Email, Role)
+                AuthCtrl->>AuthCtrl: SignInAsync (Cookie DFIT_AUTH_SESSION)
+                AuthCtrl-->>Usuario: Redirect → Dashboard (Admin), Recepcion (Recepcionista) o MiMembresia (Usuario)
+            end
+        end
     end
 ```
 
@@ -373,7 +402,7 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     });
 ```
 
-### 5.3 Control de Acceso por Niveles
+### 5.3 Control de Acceso por Niveles (RBAC: Admin, Recepcionista, Usuario)
 
 ```mermaid
 graph TD
@@ -382,29 +411,32 @@ graph TD
         B["[AllowAnonymous] en AuthController"]
     end
 
-    subgraph Nivel2["Nivel 2: Acción"]
+    subgraph Nivel2["Nivel 2: Acción y Roles"]
         C["[Authorize(Roles = 'Admin')]"]
-        D["Sin atributo adicional (hereda [Authorize])"]
+        D["[Authorize(Roles = 'Admin,Recepcionista')]"]
+        E["Sin atributo de rol (hereda [Authorize])"]
     end
 
     subgraph Nivel3["Nivel 3: Lógica de negocio"]
-        E["PermisosHelper.EsAdminOPropietario()"]
-        F["PermisosHelper.EsAdmin()"]
-        G["PermisosHelper.ObtenerUsuarioId()"]
+        F["PermisosHelper.EsAdminOPropietario()"]
+        G["PermisosHelper.EsAdmin()"]
+        H["PermisosHelper.ObtenerUsuarioId()"]
     end
 
     A --> C
     A --> D
-    D --> E
-    D --> F
-    D --> G
-    B --> H["Rutas públicas: login, registro, acceso denegado"]
+    A --> E
+    E --> F
+    E --> G
+    E --> H
+    B --> I["Rutas públicas: login, registro, acceso denegado"]
 ```
 
 | Nivel | Mecanismo | Dónde se aplica |
 |---|---|---|
 | **Controlador** | `[Authorize]` en `HomeController` | Todas las acciones requieren autenticación por defecto |
-| **Acción** | `[Authorize(Roles = "Admin")]` | Dashboard, CRUD usuarios, membresías, pagos, rutinas, horarios |
+| **Acción (Admin)** | `[Authorize(Roles = "Admin")]` | Dashboard general, CRUD de usuarios, planes de membresía, rutinas y horarios |
+| **Acción (Recepción)** | `[Authorize(Roles = "Admin,Recepcionista")]` | Consola de recepción (`/Home/Recepcion`), cobro rápido, pagos e ingresos |
 | **Lógica** | `User.EsAdminOPropietario(id)` | Profile, MiMembresia, PagosUsuario, CancelMembresia |
 | **Anónimo** | `[AllowAnonymous]` | Login, Register, AccessDenied, redirecciones de compatibilidad |
 
@@ -416,7 +448,7 @@ graph TD
 | `ObtenerUsuarioId()` | `ClaimsPrincipal?.ObtenerUsuarioId() → string?` | Extrae el claim `NameIdentifier` |
 | `EsAdminOPropietario()` | `ClaimsPrincipal?.EsAdminOPropietario(targetId) → bool` | `true` si es Admin **o** si su ID coincide con el `targetId` |
 
-### 5.5 Sincronización de Sesión Multi-Pestaña (`dfit-sincronizacion-sesion.js`) 🆕
+### 5.5 Sincronización de Sesión Multi-Pestaña (`dfit-sincronizacion-sesion.js`)
 
 DFIT implementa una arquitectura de comunicación entre pestañas (*cross-tab state sync*) para resolver el problema clásico de desincronización de sesión:
 
@@ -445,15 +477,51 @@ sequenceDiagram
 | **Detección en Reactivación** | `document.addEventListener("visibilitychange")` | Al traer al frente una pestaña en segundo plano, valida si la sesión cambió o caducó |
 | **Intercambio de Cuenta** | Evento `cambio_cuenta` | Si el usuario inicia sesión con otra cuenta en la pestaña B, la pestaña A se actualiza sin pantalla de error |
 
-### 5.6 Canales de Asistencia y Accesibilidad (`_AssistanceDrawer.cshtml`) 🆕
+### 5.6 Canales de Asistencia, Atajo de Teclado y Accesibilidad (`_AssistanceDrawer.cshtml`) 🆕
 
-Diseñado como un drawer lateral offcanvas reutilizable (`#assistanceDrawer`), accesible desde Login, Register y vistas públicas:
+Diseñado como un drawer lateral offcanvas reutilizable (`#assistanceDrawer`), accesible desde cualquier punto del sistema:
 
-- **Canales de Atención Directa**: Enlaces rápidos a WhatsApp de administración con mensaje precargado, correo corporativo (`soporte@dfitpower.com`) y central telefónica.
+- **Atajo Dinámico de Teclado**: Soporte para apertura y cierre rápido mediante combinación de teclas configurable (por defecto `Ctrl + /` o `Cmd + /` en macOS). Cuenta con detección inteligente para no interferir con campos de entrada de texto.
+- **Canales de Atención Directa**: Enlaces rápidos a WhatsApp corporativo con mensaje precargado, soporte por correo (`soporte@dfitpower.com`) y teléfono de recepción.
 - **Recordar Correo Electrónico**: Checkbox interactivo que persiste el correo en `localStorage` (`dfit_saved_email`) para agilizar logins recurrentes.
 - **Limpieza Rápida de Entradas**: Botón integrado (`btn-clear-input`) para vaciar los campos de formulario de forma accesible.
 - **Compatibilidad con Lectores de Pantalla**: Alertas con atributos `role="alert"` y `aria-live="assertive"` para feedback inmediato de errores de validación.
-- **Hoja de Estilos Dedicada**: `dfit-login.css` desacopla los estilos de autenticación y soporte de `site.css`, garantizando diseño responsivo y sin desbordamientos verticales.
+
+### 5.7 Criptografía y Hasheo de Contraseñas (OWASP A02:2021) 🆕
+
+Para cumplir con el estándar **OWASP Top 10 - A02:2021 (Fallos Criptográficos)**, DFIT erradicó el almacenamiento de contraseñas en texto plano:
+
+- **Algoritmo**: PBKDF2 (Password-Based Key Derivation Function 2) con HMAC-SHA256/512.
+- **Sal Aleatoria Criptográfica**: Sal de 128 bits generada por cada contraseña, garantizando que dos usuarios con la misma clave tengan hashes completamente distintos e impidiendo ataques de tablas arcoíris (*rainbow tables*).
+- **Factor de Trabajo**: Más de 100,000 iteraciones mediante `Microsoft.AspNetCore.Identity.PasswordHasher<T>`, mitigando ataques de fuerza bruta por GPU.
+- **Cobertura Integral (6 puntos del sistema)**:
+  1. **Registro Público**: `AuthController.Register` construye el usuario pasando la clave por el hasher.
+  2. **Alta por Administrador**: `HomeController.CreateUser` hashea antes de persistir en Firestore.
+  3. **Registro Rápido en Recepción**: `HomeController.RegistrarSocioRecepcion` hashea la clave elegida o el DNI predeterminado.
+  4. **Edición de Perfil**: `HomeController.Profile` genera un nuevo hash si se define una nueva contraseña.
+  5. **Patrón Builder**: `UsuarioBuilder.SetPassword()` inyecta el `IPasswordHasherService`.
+  6. **Autenticación (Login)**: `AuthController.Login` usa `VerifyPassword()` para contrastar hashes.
+
+> [!IMPORTANT]
+> **Migración Transparente de Contraseñas Legadas**:
+> La implementación de `PasswordHasherService` detecta si un registro preexistente contiene texto plano mediante `IsHashed()`. Al iniciar sesión correctamente, valida la clave e **inmediatamente rehashea el campo en Firestore a formato PBKDF2**, logrando una transición 100% transparente sin obligar al usuario a restablecer su contraseña.
+
+### 5.8 Mitigaciones de Seguridad OWASP según Reporte ZAP 🆕
+
+Tras la auditoría de seguridad automatizada con OWASP ZAP, se aplicaron controles en el pipeline HTTP de `Program.cs` y en la arquitectura de autenticación:
+
+1. **Content Security Policy (CSP)**:
+   Restricción de fuentes seguras (`self`, Google Fonts, Cloudflare CDN) para prevenir inyección de scripts (XSS).
+2. **Mitigación de Clickjacking**:
+   Inyección de cabecera `X-Frame-Options: SAMEORIGIN` e inclusión de `frame-ancestors 'self'` en CSP.
+3. **MIME Sniffing Prevention**:
+   Cabecera `X-Content-Type-Options: nosniff` para evitar ataques basados en interpretación errónea de contenidos.
+4. **Protección contra Fuerza Bruta y Credential Stuffing (`RateLimiter`)**:
+   Límite de intentos fallidos consecutivos por cuenta e IP pública. Bloqueo temporal exponencial con reinicio automático tras éxito.
+5. **Filtrado de IP para Entornos Cloud / Proxy (`IpHelper`)**:
+   Distingue IPs públicas de rangos privados o de loopback (Render/Cloudflare), evitando que un bloqueo por IP afecte a múltiples usuarios bajo el mismo balanceador.
+6. **Refactorización de `FirebaseConfig`**:
+   Reducción de complejidad condicional a un máximo de 2 niveles utilizando cláusulas de guarda tempranas.
 
 ---
 
@@ -624,16 +692,59 @@ public static class ReglasMembresia
 | **Paralelismo** | Habilitado a nivel de método (`ExecutionScope.MethodLevel`) |
 | **Clase base** | `PruebaDocumentada` — helper `Comprobar<T>()` que loguea esperado/obtenido en el informe TRX |
 
-### 8.2 Inventario de Pruebas (31 tests)
+### 8.2 Inventario de Pruebas (68 tests)
 
 ```mermaid
-pie title Distribución de Pruebas por Categoría (Total: 31)
+pie title Distribución de Pruebas por Categoría (Total: 68)
+    "Seguridad y Hasheo (PBKDF2)" : 8
+    "Protección Fuerza Bruta (RateLimiter)" : 13
+    "Filtro de IPs (IpHelper)" : 11
+    "Validación Registro (OWASP)" : 5
     "Pagos (Strategy)" : 7
     "Vigencia (fechas)" : 6
     "Acceso (membresía)" : 6
     "Configuración (EnvLoader)" : 5
     "Permisos (Roles/Claims)" : 7
 ```
+
+#### PasswordHasherTests (8 tests) — Categoría: `SeguridadHasheo` 🆕
+
+| ID | Caso de prueba | Qué valida |
+|---|---|---|
+| CP-HASH-001 | `HashPassword` genera hash diferente a texto plano | Salida no reversible y longitud > 40 caracteres |
+| CP-HASH-002 | `HashPassword` genera hashes diferentes para la misma clave | Sal aleatoria criptográfica única por hash |
+| CP-HASH-003 | `VerifyPassword` con hash correcto | ✅ Retorna true ante credenciales válidas |
+| CP-HASH-004 | `VerifyPassword` con clave incorrecta | ❌ Retorna false y rechaza autenticación |
+| CP-HASH-005 | `VerifyPassword` con clave en texto plano legado | ✅ Soporta migración transparente de cuentas antiguas |
+| CP-HASH-006 | `VerifyPassword` con clave legada incorrecta | ❌ Rechaza texto plano no coincidente |
+| CP-HASH-007 | `IsHashed` con hash PBKDF2 válido | Reconoce formato y prefijo de versión |
+| CP-HASH-008 | `IsHashed` con texto plano o vacío | Detecta cuándo una clave requiere migración |
+
+#### RateLimiterTests (13 tests) — Categoría: `Seguridad` 🆕
+
+| ID | Caso de prueba | Qué valida |
+|---|---|---|
+| CP-RL-001..003 | Verificación de estado inicial y umbral de intentos | Permite accesos legítimos y contabiliza fallos |
+| CP-RL-004..006 | Bloqueo temporal por cuenta (email) | Bloquea tras N intentos fallidos consecutivos |
+| CP-RL-007..009 | Restablecimiento por éxito (`RegistrarExito`) | Limpia contador tras inicio de sesión exitoso |
+| CP-RL-010..013 | Bloqueo por IP y protección contra Password Spraying | Aísla ataques dirigidos a múltiples cuentas desde una misma IP |
+
+#### IpHelperTests (11 tests) — Categoría: `Seguridad` 🆕
+
+| ID | Caso de prueba | Qué valida |
+|---|---|---|
+| CP-IP-001..005 | Detección de cabeceras `X-Forwarded-For` y `X-Real-IP` | Extracción correcta detrás de proxies y balanceadores |
+| CP-IP-006..011 | Discriminación de IP pública vs privada/loopback | Evita bloqueos globales colaterales en entornos Cloud (Render) |
+
+#### RegistroValidacionTests (5 tests) — Categoría: `RegistroSeguridad` 🆕
+
+| ID | Caso de prueba | Qué valida |
+|---|---|---|
+| CP-SEC-001 | Rechazo de secuencias numéricas triviales (123456789) | Cumplimiento estándar OWASP |
+| CP-SEC-002 | Rechazo de claves sin mayúsculas, números o símbolos | Entropía mínima obligatoria |
+| CP-SEC-003 | Rechazo de clave que contenga el DNI del usuario | Prohibición de identificadores en credencial |
+| CP-SEC-004 | Clave robusta con alta entropía | ✅ Validación exitosa sin errores |
+| CP-SEC-005 | `UsuarioBuilder` con asignación completa | Construcción correcta de identidad de usuario |
 
 #### PaymentContextTests (7 tests) — Categoría: `Pagos`
 
@@ -945,16 +1056,18 @@ docker run -p 8080:8080 dfit
 | # | Observación | Severidad | Estado |
 |---|---|---|---|
 | 1 | `firebase-key.json` commiteado al repo — riesgo de exposición de credenciales | 🔴 Crítico | ⚠️ Mitigado parcialmente con `EnvLoader` + `FirebaseConfig` (soporte para variables de entorno), pero el archivo aún está en el repo |
-| 2 | Contraseñas almacenadas en texto plano (`PasswordHash` es solo texto) — no hay hashing real | 🔴 Crítico | Pendiente |
+| 2 | ~~Contraseñas almacenadas en texto plano~~ → Hasheo robusto con PBKDF2 + sal aleatoria (128 bits) vía `PasswordHasherService` + migración transparente progresiva | ✅ Resuelto | Cumple con OWASP A02:2021 (Fallos Criptográficos) |
 | 3 | ~~No hay autenticación de sesión real~~ → Implementado sistema completo de Cookie Authentication con Claims, `[Authorize]`, roles, expiración de 8h y sliding expiration | ✅ Resuelto | `AuthController` + `Program.cs` |
-| 4 | ~~Un solo controlador~~ → Separado en `AuthController` (300 líneas) + `HomeController` (826 líneas) | ✅ Parcialmente resuelto | `HomeController` sigue siendo grande; considerar separar en más controladores por dominio |
+| 4 | ~~Un solo controlador~~ → Separado en `AuthController` + `HomeController` | ✅ Parcialmente resuelto | Se incorporó el módulo de recepción y autenticación desacoplada |
 | 5 | EF Core + SQL Server declarado como dependencia pero sin uso — limpiar el `.csproj` | 🟡 Medio | Pendiente |
 | 6 | Incompatibilidad `net10.0` vs imagen Docker `aspnet:8.0` | ✅ Resuelto | Dockerfile actualizado a `dotnet/aspnet:10.0` |
 | 7 | Múltiples lecturas secuenciales a Firestore por entidad (sin batch queries ni caché) | 🟡 Medio | Pendiente |
 | 8 | `GymAccessProxy` usa `.Result` en métodos async — riesgo de deadlock | 🟠 Alto | Pendiente |
-| 9 | 🆕 31 pruebas unitarias implementadas cubriendo Strategy, reglas de membresía, EnvLoader y PermisosHelper (100% aprobadas) | ✅ Logro | Ejecutables con `dotnet test` |
-| 10 | 🆕 Control de acceso granular con `[Authorize(Roles)]` + `PermisosHelper` en lógica de negocio | ✅ Logro | Resuelve el punto #3 original |
-| 11 | 🆕 `EnvLoader` + `FirebaseConfig` permiten configuración sin archivo hardcodeado | ✅ Logro | Compatible con Render y desarrollo local |
+| 9 | 🆕 68 pruebas unitarias implementadas cubriendo Criptografía PBKDF2, Rate Limiting, IPs, Registro OWASP, Strategy, Vigencia, Acceso, EnvLoader y PermisosHelper (100% aprobadas) | ✅ Logro | Ejecutables con `dotnet test` (0 errores) |
+| 10 | 🆕 Control de acceso granular con `[Authorize(Roles)]` + `PermisosHelper` en lógica de negocio (Admin, Recepcionista, Usuario) | ✅ Logro | Resuelve el punto #3 original |
+| 11 | 🆕 `EnvLoader` + `FirebaseConfig` permiten configuración sin archivo hardcodeado y con baja complejidad ciclomática | ✅ Logro | Compatible con Render y desarrollo local |
 | 12 | 🆕 Sincronización reactiva de sesión multi-pestaña (`dfit-sincronizacion-sesion.js` vía BroadcastChannel) | ✅ Logro | Elimina errores de concurrencia y desincronización entre pestañas |
-| 13 | 🆕 Componente compartido de Asistencia y Accesibilidad (`_AssistanceDrawer.cshtml` + `dfit-login.css`) | ✅ Logro | Soporte WhatsApp, correo, botones de borrado y recordar usuario |
+| 13 | 🆕 Componente compartido de Asistencia y Accesibilidad (`_AssistanceDrawer.cshtml` + `dfit-login.css`) con atajo de teclado dinámico | ✅ Logro | Soporte WhatsApp, correo, botones de borrado y atajo `Ctrl + /` |
 | 14 | 🆕 Documentación formal de pruebas bajo norma IEEE 829 y scripts de automatización TRX en `docs/pruebas-unitarias/` | ✅ Logro | Trazabilidad completa con ciclo TDD (Baseline, Red, Green, Refactor) |
+| 15 | 🆕 Mitigaciones integrales OWASP ZAP (Cabeceras HTTP CSP, X-Frame-Options, X-Content-Type-Options y Rate Limiting) | ✅ Logro | Protección contra Clickjacking, XSS, MIME Sniffing y ataques de fuerza bruta |
+| 16 | 🆕 Consola Operativa de Recepción (`/Home/Recepcion`) con rol dedicado `Recepcionista` | ✅ Logro | Monitoreo en vivo de vigencias de socios, altas rápidas y cobro ágil |

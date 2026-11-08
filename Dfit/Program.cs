@@ -65,6 +65,7 @@ FirebaseConfig.Configure(builder);
 
 builder.Services.AddSingleton<IQRTokenService, QRTokenManager>();
 builder.Services.AddSingleton<IRateLimiter, RateLimiter>();
+builder.Services.AddSingleton<IPasswordHasherService, PasswordHasherService>();
 builder.Services.AddScoped<RealGymAccess>();
 builder.Services.AddScoped<IGymAccess, GymAccessProxy>();
 builder.Services.AddScoped<PaymentContext>();
