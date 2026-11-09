@@ -117,6 +117,12 @@ app.Use(async (context, next) =>
 });
 
 app.UseHttpsRedirection();
+// Captura excepciones de código no controladas (Errores 500) y redirige
+app.UseExceptionHandler("/Error/500");
+
+// Intercepta códigos de estado HTTP (401, 403, 404, etc.) y redirige pasando el código
+app.UseStatusCodePagesWithReExecute("/Error/{0}");
+
 app.UseStaticFiles();
 
 app.UseRouting();
